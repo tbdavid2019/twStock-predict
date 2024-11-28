@@ -160,6 +160,39 @@ def get_stock_items(url):
         logging.error(f"獲取股票項目失敗: {str(e)}")
         return {}
 
+def update_category(category):
+    stocks = update_stocks(category)
+    return {
+        stock_dropdown: gr.update(choices=stocks, value=None),
+        stock_item_dropdown: gr.update(choices=[], value=None),
+        stock_plot: gr.update(value=None),
+        status_output: gr.update(value="")
+    }
+
+def update_stock(category, stock):
+    if not category or not stock:
+        return {
+            stock_item_dropdown: gr.update(choices=[], value=None),
+            stock_plot: gr.update(value=None),
+            status_output: gr.update(value="")
+        }
+    
+    url = next((item['網址'] for item in category_dict.get(category, [])
+                if item['類股'] == stock), None)
+    
+    if url:
+        stock_items = get_stock_items(url)
+        return {
+            stock_item_dropdown: gr.update(choices=list(stock_items.keys()), value=None),
+            stock_plot: gr.update(value=None),
+            status_output: gr.update(value="")
+        }
+    return {
+        stock_item_dropdown: gr.update(choices=[], value=None),
+        stock_plot: gr.update(value=None),
+        status_output: gr.update(value="")
+    }
+
 def predict_stock(category, stock, stock_item, period, selected_features):
     if not all([category, stock, stock_item]):
         return None, "請選擇產業類別、類股和股票"
@@ -201,7 +234,7 @@ def predict_stock(category, stock, stock_item, period, selected_features):
                 mode='lines+markers',
                 name=f'預測{feature}'
             ))
-
+        
         fig.update_layout(
             title=f'{stock_item} 股價預測 (未來5天)',
             xaxis_title='日期',
