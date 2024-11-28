@@ -194,7 +194,7 @@ def update_stock(category, stock):
         status_output: gr.update(value="")
     }
 
-def predict_stock(category, stock, stock_item, selected_features):
+def predict_stock(category, stock, stock_item, period, selected_features):
     if not all([category, stock, stock_item]):
         return gr.update(value=None), "請選擇產業類別、類股和股票"
     
@@ -211,7 +211,7 @@ def predict_stock(category, stock, stock_item, selected_features):
             return gr.update(value=None), "無法獲取股票代碼"
         
         # 下載股票數據，根據用戶選擇的時間範圍
-        df = yf.download(stock_code, period="1y")
+        df = yf.download(stock_code, period=period)
         if df.empty:
             raise ValueError("無法獲取股票數據")
         
@@ -305,11 +305,10 @@ with gr.Blocks() as demo:
     
     predict_button.click(
         predict_stock,
-        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, features_checkbox],
+        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, period_dropdown, features_checkbox],
         outputs=[stock_plot, status_output]
     )
 
 # 啟動應用
 if __name__ == "__main__":
     demo.launch(share=False)
-
