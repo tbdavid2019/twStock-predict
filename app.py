@@ -222,7 +222,7 @@ def predict_stock(category, stock, stock_item, period, selected_features):
         last_data = predictor.scaler.transform(df.iloc[-1:][selected_features])
         predictions = predictor.predict(last_data[0], 5)
         
-        # 創建日期指標
+        # 創建日期索引
         dates = [datetime.now() + timedelta(days=i) for i in range(6)]
         date_labels = [d.strftime('%m/%d') for d in dates]
         
