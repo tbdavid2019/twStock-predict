@@ -90,11 +90,11 @@ class StockPredictor:
         scaled_data = self.scaler.fit_transform(df[selected_features])
         
         X, y = [], []
-        for i in range(len(scaled_data) - 1):
-            X.append(scaled_data[i])
-            y.append(scaled_data[i+1])
+        for i in range(len(scaled_data) - 5):
+            X.append(scaled_data[i:i+5])
+            y.append(scaled_data[i+5])
         
-        return np.array(X).reshape(-1, 1, len(selected_features)), np.array(y)
+        return np.array(X), np.array(y)
     
     def build_model(self, input_shape):
         model = Sequential([
@@ -109,7 +109,7 @@ class StockPredictor:
     
     def train(self, df, selected_features):
         X, y = self.prepare_data(df, selected_features)
-        self.model = self.build_model((1, X.shape[2]))
+        self.model = self.build_model((X.shape[1], X.shape[2]))
         history = self.model.fit(
             X, y,
             epochs=50,
@@ -124,10 +124,10 @@ class StockPredictor:
         current_data = last_data.copy()
         
         for _ in range(n_days):
-            next_day = self.model.predict(current_data.reshape(1, 1, -1), verbose=0)
+            next_day = self.model.predict(current_data.reshape(1, current_data.shape[0], current_data.shape[1]), verbose=0)
             predictions.append(next_day[0])
             
-            current_data = next_day
+            current_data = np.vstack([current_data[1:], next_day])
         
         return np.array(predictions)
 
@@ -218,8 +218,8 @@ def predict_stock(category, stock, stock_item, period, selected_features):
         predictor = StockPredictor()
         predictor.train(df, selected_features)
         
-        last_data = predictor.scaler.transform(df.iloc[-1:][selected_features])
-        predictions = predictor.predict(last_data[0], 5)
+        last_data = predictor.scaler.transform(df[selected_features].iloc[-5:])
+        predictions = predictor.predict(last_data, 5)
         
         # 創建日期索引
         dates = [datetime.now() + timedelta(days=i) for i in range(6)]
