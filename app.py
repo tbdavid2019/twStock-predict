@@ -9,7 +9,6 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
 from datetime import datetime, timedelta
 import plotly.graph_objs as go
-import plotly.io as pio
 import yfinance as yf
 import logging
 import tempfile
@@ -17,7 +16,7 @@ import os
 import matplotlib as mpl
 import matplotlib.font_manager as fm
 
-# 設置日志
+# 設置日誌
 logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -161,54 +160,21 @@ def get_stock_items(url):
         logging.error(f"獲取股票項目失敗: {str(e)}")
         return {}
 
-def update_category(category):
-    stocks = update_stocks(category)
-    return {
-        stock_dropdown: gr.update(choices=stocks, value=None),
-        stock_item_dropdown: gr.update(choices=[], value=None),
-        stock_plot: gr.update(value=None),
-        status_output: gr.update(value="")
-    }
-
-def update_stock(category, stock):
-    if not category or not stock:
-        return {
-            stock_item_dropdown: gr.update(choices=[], value=None),
-            stock_plot: gr.update(value=None),
-            status_output: gr.update(value="")
-        }
-    
-    url = next((item['網址'] for item in category_dict.get(category, [])
-                if item['類股'] == stock), None)
-    
-    if url:
-        stock_items = get_stock_items(url)
-        return {
-            stock_item_dropdown: gr.update(choices=list(stock_items.keys()), value=None),
-            stock_plot: gr.update(value=None),
-            status_output: gr.update(value="")
-        }
-    return {
-        stock_item_dropdown: gr.update(choices=[], value=None),
-        stock_plot: gr.update(value=None),
-        status_output: gr.update(value="")
-    }
-
 def predict_stock(category, stock, stock_item, period, selected_features):
     if not all([category, stock, stock_item]):
-        return gr.update(value=None), "請選擇產業類別、類股和股票"
+        return None, "請選擇產業類別、類股和股票"
     
     try:
         url = next((item['網址'] for item in category_dict.get(category, [])
                    if item['類股'] == stock), None)
         if not url:
-            return gr.update(value=None), "無法獲取類股網址"
+            return None, "無法獲取類股網址"
         
         stock_items = get_stock_items(url)
         stock_code = stock_items.get(stock_item, "")
         
         if not stock_code:
-            return gr.update(value=None), "無法獲取股票代碼"
+            return None, "無法獲取股票代碼"
         
         # 下載股票數據，根據用戶選擇的時間範圍
         df = yf.download(stock_code, period=period)
@@ -235,7 +201,7 @@ def predict_stock(category, stock, stock_item, period, selected_features):
                 mode='lines+markers',
                 name=f'預測{feature}'
             ))
-        
+
         fig.update_layout(
             title=f'{stock_item} 股價預測 (未來5天)',
             xaxis_title='日期',
@@ -243,11 +209,11 @@ def predict_stock(category, stock, stock_item, period, selected_features):
             template='plotly_dark'
         )
         
-        return gr.update(value=pio.to_html(fig, full_html=False)), "預測成功"
+        return fig, "預測成功"
         
     except Exception as e:
         logging.error(f"預測過程發生錯誤: {str(e)}")
-        return gr.update(value=None), f"預測過程發生錯誤: {str(e)}"
+        return None, f"預測過程發生錯誤: {str(e)}"
 
 # 初始化
 setup_font()
@@ -288,7 +254,7 @@ with gr.Blocks() as demo:
             status_output = gr.Textbox(label="狀態", interactive=False)
     
     with gr.Row():
-        stock_plot = gr.HTML(label="股價預測圖")
+        stock_plot = gr.Plot(label="股價預測圖")
     
     # 事件綁定
     category_dropdown.change(
