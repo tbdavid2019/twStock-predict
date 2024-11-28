@@ -7,14 +7,15 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
-from datetime import datetime, timedelta
-import plotly.graph_objs as go
-import yfinance as yf
-import logging
-import tempfile
-import os
+import matplotlib.pyplot as plt
+import io
 import matplotlib as mpl
 import matplotlib.font_manager as fm
+import tempfile
+import os
+import yfinance as yf
+import logging
+from datetime import datetime, timedelta
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO,
@@ -90,11 +91,11 @@ class StockPredictor:
         scaled_data = self.scaler.fit_transform(df[selected_features])
         
         X, y = [], []
-        for i in range(len(scaled_data) - 5):
-            X.append(scaled_data[i:i+5])
-            y.append(scaled_data[i+5])
+        for i in range(len(scaled_data) - 1):
+            X.append(scaled_data[i])
+            y.append(scaled_data[i+1])
         
-        return np.array(X), np.array(y)
+        return np.array(X).reshape(-1, 1, len(selected_features)), np.array(y)
     
     def build_model(self, input_shape):
         model = Sequential([
@@ -109,7 +110,7 @@ class StockPredictor:
     
     def train(self, df, selected_features):
         X, y = self.prepare_data(df, selected_features)
-        self.model = self.build_model((X.shape[1], X.shape[2]))
+        self.model = self.build_model((1, X.shape[2]))
         history = self.model.fit(
             X, y,
             epochs=50,
@@ -124,10 +125,12 @@ class StockPredictor:
         current_data = last_data.copy()
         
         for _ in range(n_days):
-            next_day = self.model.predict(current_data.reshape(1, current_data.shape[0], current_data.shape[1]), verbose=0)
+            next_day = self.model.predict(current_data.reshape(1, 1, -1), verbose=0)
             predictions.append(next_day[0])
             
-            current_data = np.vstack([current_data[1:], next_day])
+            current_data = current_data.flatten()
+            current_data[:len(next_day[0])] = next_day[0]
+            current_data = current_data.reshape(1, -1)
         
         return np.array(predictions)
 
@@ -195,19 +198,19 @@ def update_stock(category, stock):
 
 def predict_stock(category, stock, stock_item, period, selected_features):
     if not all([category, stock, stock_item]):
-        return None, "請選擇產業類別、類股和股票"
+        return gr.update(value=None), "請選擇產業類別、類股和股票"
     
     try:
         url = next((item['網址'] for item in category_dict.get(category, [])
                    if item['類股'] == stock), None)
         if not url:
-            return None, "無法獲取類股網址"
+            return gr.update(value=None), "無法獲取類股網址"
         
         stock_items = get_stock_items(url)
         stock_code = stock_items.get(stock_item, "")
         
         if not stock_code:
-            return None, "無法獲取股票代碼"
+            return gr.update(value=None), "無法獲取股票代碼"
         
         # 下載股票數據，根據用戶選擇的時間範圍
         df = yf.download(stock_code, period=period)
@@ -218,35 +221,45 @@ def predict_stock(category, stock, stock_item, period, selected_features):
         predictor = StockPredictor()
         predictor.train(df, selected_features)
         
-        last_data = predictor.scaler.transform(df[selected_features].iloc[-5:])
-        predictions = predictor.predict(last_data, 5)
+        last_data = predictor.scaler.transform(df[selected_features].iloc[-1:].values)
+        predictions = predictor.predict(last_data[0], 5)
+        
+        # 反轉預測結果
+        last_original = df[selected_features].iloc[-1].values
+        predictions_original = predictor.scaler.inverse_transform(
+            np.vstack([last_data, predictions])
+        )
+        all_predictions = np.vstack([last_original, predictions_original[1:]])
         
         # 創建日期索引
         dates = [datetime.now() + timedelta(days=i) for i in range(6)]
         date_labels = [d.strftime('%m/%d') for d in dates]
         
-        # 用 Plotly 繪圖
-        fig = go.Figure()
-        for i, feature in enumerate(selected_features):
-            fig.add_trace(go.Scatter(
-                x=date_labels,
-                y=np.hstack([df[feature].iloc[-1], predictions[:, i]]),
-                mode='lines+markers',
-                name=f'預測{feature}'
-            ))
+        # 繪圖
+        fig, ax = plt.subplots(figsize=(14, 7))
+        colors = ['#FF9999', '#66B2FF']
+        labels = [f'預測{feature}' for feature in selected_features]
         
-        fig.update_layout(
-            title=f'{stock_item} 股價預測 (未來5天)',
-            xaxis_title='日期',
-            yaxis_title='股價',
-            template='plotly_dark'
-        )
+        for i, (label, color) in enumerate(zip(labels, colors)):
+            ax.plot(date_labels, all_predictions[:, i], label=label,
+                   marker='o', color=color, linewidth=2)
+            for j, value in enumerate(all_predictions[:, i]):
+                ax.annotate(f'{value:.2f}', (date_labels[j], value),
+                           textcoords="offset points", xytext=(0,10),
+                           ha='center', va='bottom')
         
-        return fig, "預測成功"
+        ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
+        ax.set_xlabel('日期', labelpad=10)
+        ax.set_ylabel('股價', labelpad=10)
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+        ax.grid(True, linestyle='--', alpha=0.7)
+        
+        plt.tight_layout()
+        return gr.update(value=fig), "預測成功"
         
     except Exception as e:
         logging.error(f"預測過程發生錯誤: {str(e)}")
-        return None, f"預測過程發生錯誤: {str(e)}"
+        return gr.update(value=None), f"預測過程發生錯誤: {str(e)}"
 
 # 初始化
 setup_font()
