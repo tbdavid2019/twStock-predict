@@ -330,6 +330,6 @@ with gr.Blocks() as demo:
                 period_dropdown, features_checkbox, model_type_radio],
         outputs=[stock_plot, status_output]
     )
-
-# 啟動應用
-if __name__ == "__main__
+    
+if __name__ == "__main__":
+    demo.launch(share=False)
