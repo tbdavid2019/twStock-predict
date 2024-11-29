@@ -16,7 +16,7 @@ import os
 import yfinance as yf
 import logging
 from datetime import datetime, timedelta
-
+from prophet import Prophet
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO,
@@ -233,7 +233,6 @@ def predict_stock(category, stock, stock_item, period, selected_features, model_
             all_predictions = np.vstack([last_original, predictions_original[1:]])
         
         elif model_choice == "Prophet":
-            from prophet import Prophet
             prophet_df = df.reset_index()[['Date', 'Close']]
             prophet_df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
             
@@ -243,25 +242,25 @@ def predict_stock(category, stock, stock_item, period, selected_features, model_
             future = model.make_future_dataframe(periods=5)
             forecast = model.predict(future)
             all_predictions = forecast[['ds', 'yhat']].tail(6).values
+            
+            # 取出日期和預測結果
+            date_labels = [d.strftime('%m/%d') for d in forecast['ds'].tail(6)]
+            predictions = forecast['yhat'].tail(6).values
+            
+            # 繪圖
+            fig, ax = plt.subplots(figsize=(14, 7))
+            ax.plot(date_labels, predictions, label="預測股價", marker='o', color='#FF9999', linewidth=2)
+            ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
+            ax.set_xlabel('日期', labelpad=10)
+            ax.set_ylabel('股價', labelpad=10)
+            ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+            ax.grid(True, linestyle='--', alpha=0.7)
+
+            plt.tight_layout()
+            return gr.update(value=fig), "預測成功"
 
         else:
             return gr.update(value=None), "未知的模型選擇"
-
-        # 創建日期索引
-        dates = [datetime.now() + timedelta(days=i) for i in range(len(all_predictions))]
-        date_labels = [d.strftime('%m/%d') for d in dates]
-
-        # 繪圖
-        fig, ax = plt.subplots(figsize=(14, 7))
-        ax.plot(date_labels, all_predictions, label="預測股價", marker='o', color='#FF9999', linewidth=2)
-        ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
-        ax.set_xlabel('日期', labelpad=10)
-        ax.set_ylabel('股價', labelpad=10)
-        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-        ax.grid(True, linestyle='--', alpha=0.7)
-
-        plt.tight_layout()
-        return gr.update(value=fig), "預測成功"
 
     except Exception as e:
         logging.error(f"預測過程發生錯誤: {str(e)}")
