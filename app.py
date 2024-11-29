@@ -232,7 +232,31 @@ def predict_stock(category, stock, stock_item, period, selected_features, model_
             )
             all_predictions = np.vstack([last_original, predictions_original[1:]])
         
+            # 創建日期索引
+            dates = [datetime.now() + timedelta(days=i) for i in range(6)]
+            date_labels = [d.strftime('%m/%d') for d in dates]
+            
+            # 繪圖
+            fig, ax = plt.subplots(figsize=(14, 7))
+            for i, feature in enumerate(selected_features):
+                ax.plot(date_labels, all_predictions[:, i], label=f'預測{feature}', marker='o', linewidth=2)
+                for j, value in enumerate(all_predictions[:, i]):
+                    ax.annotate(f'{value:.2f}', (date_labels[j], value),
+                               textcoords="offset points", xytext=(0,10),
+                               ha='center', va='bottom')
+            
+            ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
+            ax.set_xlabel('日期', labelpad=10)
+            ax.set_ylabel('股價', labelpad=10)
+            ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+            ax.grid(True, linestyle='--', alpha=0.7)
+            plt.tight_layout()
+            return gr.update(value=fig), "預測成功"
+
         elif model_choice == "Prophet":
+            if 'Close' not in selected_features:
+                return gr.update(value=None), "Prophet 模型僅支持 'Close' 特徵"
+            
             prophet_df = df.reset_index()[['Date', 'Close']]
             prophet_df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
             
@@ -241,10 +265,9 @@ def predict_stock(category, stock, stock_item, period, selected_features, model_
 
             future = model.make_future_dataframe(periods=5)
             forecast = model.predict(future)
-            all_predictions = forecast[['ds', 'yhat']].tail(6).values
             
             # 取出日期和預測結果
-            date_labels = [d.strftime('%m/%d') for d in forecast['ds'].tail(6)]
+            date_labels = forecast['ds'].tail(6).dt.strftime('%m/%d').tolist()
             predictions = forecast['yhat'].tail(6).values
             
             # 繪圖
@@ -255,7 +278,6 @@ def predict_stock(category, stock, stock_item, period, selected_features, model_
             ax.set_ylabel('股價', labelpad=10)
             ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
             ax.grid(True, linestyle='--', alpha=0.7)
-
             plt.tight_layout()
             return gr.update(value=fig), "預測成功"
 
