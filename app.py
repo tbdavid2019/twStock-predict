@@ -7,6 +7,7 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
+from prophet import Prophet
 import matplotlib.pyplot as plt
 import io
 import matplotlib as mpl
@@ -16,9 +17,8 @@ import os
 import yfinance as yf
 import logging
 from datetime import datetime, timedelta
-from prophet import Prophet
 
-# 設置日誌
+# 設置日志
 logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -82,21 +82,21 @@ def fetch_stock_categories():
         logging.error(f"獲取股票類別失敗: {str(e)}")
         return {}
 
-# 股票預測模型類別
+# 股票預測模型類別保持不變...
 class StockPredictor:
     def __init__(self):
         self.model = None
         self.scaler = MinMaxScaler()
         
-    def prepare_data(self, df, selected_features):
-        scaled_data = self.scaler.fit_transform(df[selected_features])
+    def prepare_data(self, df, features):
+        scaled_data = self.scaler.fit_transform(df[features])
         
         X, y = [], []
         for i in range(len(scaled_data) - 1):
             X.append(scaled_data[i])
-            y.append(scaled_data[i+1])
+            y.append(scaled_data[i+1, [0, 3]])  # Open和Close的索引
         
-        return np.array(X).reshape(-1, 1, len(selected_features)), np.array(y)
+        return np.array(X).reshape(-1, 1, len(features)), np.array(y)
     
     def build_model(self, input_shape):
         model = Sequential([
@@ -104,13 +104,13 @@ class StockPredictor:
             Dropout(0.2),
             LSTM(50, activation='relu'),
             Dropout(0.2),
-            Dense(input_shape[1])
+            Dense(2)
         ])
         model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
         return model
     
-    def train(self, df, selected_features):
-        X, y = self.prepare_data(df, selected_features)
+    def train(self, df, features):
+        X, y = self.prepare_data(df, features)
         self.model = self.build_model((1, X.shape[2]))
         history = self.model.fit(
             X, y,
@@ -130,7 +130,8 @@ class StockPredictor:
             predictions.append(next_day[0])
             
             current_data = current_data.flatten()
-            current_data[:len(next_day[0])] = next_day[0]
+            current_data[0] = next_day[0][0]
+            current_data[3] = next_day[0][1]
             current_data = current_data.reshape(1, -1)
         
         return np.array(predictions)
@@ -169,16 +170,14 @@ def update_category(category):
     return {
         stock_dropdown: gr.update(choices=stocks, value=None),
         stock_item_dropdown: gr.update(choices=[], value=None),
-        stock_plot: gr.update(value=None),
-        status_output: gr.update(value="")
+        stock_plot: gr.update(value=None)
     }
 
 def update_stock(category, stock):
     if not category or not stock:
         return {
             stock_item_dropdown: gr.update(choices=[], value=None),
-            stock_plot: gr.update(value=None),
-            status_output: gr.update(value="")
+            stock_plot: gr.update(value=None)
         }
     
     url = next((item['網址'] for item in category_dict.get(category, [])
@@ -188,105 +187,87 @@ def update_stock(category, stock):
         stock_items = get_stock_items(url)
         return {
             stock_item_dropdown: gr.update(choices=list(stock_items.keys()), value=None),
-            stock_plot: gr.update(value=None),
-            status_output: gr.update(value="")
+            stock_plot: gr.update(value=None)
         }
     return {
         stock_item_dropdown: gr.update(choices=[], value=None),
-        stock_plot: gr.update(value=None),
-        status_output: gr.update(value="")
+        stock_plot: gr.update(value=None)
     }
 
-def predict_stock(category, stock, stock_item, period, selected_features, model_choice):
+def predict_stock(category, stock, stock_item, features, model_type):
     if not all([category, stock, stock_item]):
-        return gr.update(value=None), "請選擇產業類別、類股和股票"
+        return gr.update(value=None)
     
     try:
         url = next((item['網址'] for item in category_dict.get(category, [])
                    if item['類股'] == stock), None)
         if not url:
-            return gr.update(value=None), "無法獲取類股網址"
+            return gr.update(value=None)
         
         stock_items = get_stock_items(url)
         stock_code = stock_items.get(stock_item, "")
-
+        
         if not stock_code:
-            return gr.update(value=None), "無法獲取股票代碼"
-
-        # 下載股票數據，根據用戶選擇的時間範圍
-        df = yf.download(stock_code, period=period)
+            return gr.update(value=None)
+        
+        # 下載股票數據
+        df = yf.download(stock_code, period="1y")
         if df.empty:
             raise ValueError("無法獲取股票數據")
         
-        # 根據模型選擇進行預測
-        if model_choice == "LSTM":
+        # 預測
+        if model_type == "LSTM":
             predictor = StockPredictor()
-            predictor.train(df, selected_features)
-            last_data = predictor.scaler.transform(df[selected_features].iloc[-1:].values)
+            predictor.train(df, features)
+            last_data = predictor.scaler.transform(df.iloc[-1:][features])
             predictions = predictor.predict(last_data[0], 5)
-
+            
             # 反轉預測結果
-            last_original = df[selected_features].iloc[-1].values
+            last_original = df[features].iloc[-1].values
             predictions_original = predictor.scaler.inverse_transform(
-                np.vstack([last_data, predictions])
-            )
-            all_predictions = np.vstack([last_original, predictions_original[1:]])
+                np.hstack([predictions, np.zeros((predictions.shape[0], len(features) - 2))])
+            )[:, :2]
+            all_predictions = np.vstack([last_original, predictions_original])
         
-            # 創建日期索引
-            dates = [datetime.now() + timedelta(days=i) for i in range(6)]
-            date_labels = [d.strftime('%m/%d') for d in dates]
-            
-            # 繪圖
-            fig, ax = plt.subplots(figsize=(14, 7))
-            for i, feature in enumerate(selected_features):
-                ax.plot(date_labels, all_predictions[:, i], label=f'預測{feature}', marker='o', linewidth=2)
-                for j, value in enumerate(all_predictions[:, i]):
-                    ax.annotate(f'{value:.2f}', (date_labels[j], value),
-                               textcoords="offset points", xytext=(0,10),
-                               ha='center', va='bottom')
-            
-            ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
-            ax.set_xlabel('日期', labelpad=10)
-            ax.set_ylabel('股價', labelpad=10)
-            ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-            ax.grid(True, linestyle='--', alpha=0.7)
-            plt.tight_layout()
-            return gr.update(value=fig), "預測成功"
-
-        elif model_choice == "Prophet":
-            if 'Close' not in selected_features:
-                return gr.update(value=None), "Prophet 模型僅支持 'Close' 特徵"
-            
-            prophet_df = df.reset_index()[['Date', 'Close']]
-            prophet_df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
-            
-            model = Prophet()
-            model.fit(prophet_df)
-
-            future = model.make_future_dataframe(periods=5)
-            forecast = model.predict(future)
-            
-            # 取出日期和預測結果
-            date_labels = forecast['ds'].tail(6).dt.strftime('%m/%d').tolist()
-            predictions = forecast['yhat'].tail(6).values
-            
-            # 繪圖
-            fig, ax = plt.subplots(figsize=(14, 7))
-            ax.plot(date_labels, predictions, label="預測股價", marker='o', color='#FF9999', linewidth=2)
-            ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
-            ax.set_xlabel('日期', labelpad=10)
-            ax.set_ylabel('股價', labelpad=10)
-            ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
-            ax.grid(True, linestyle='--', alpha=0.7)
-            plt.tight_layout()
-            return gr.update(value=fig), "預測成功"
-
-        else:
-            return gr.update(value=None), "未知的模型選擇"
-
+        elif model_type == "Prophet":
+            prophet_df = df.reset_index()[['Date', 'Close']].rename(columns={'Date': 'ds', 'Close': 'y'})
+            m = Prophet()
+            m.fit(prophet_df)
+            future = m.make_future_dataframe(periods=5)
+            forecast = m.predict(future)
+            all_predictions = forecast[['ds', 'yhat']].tail(6)
+            date_labels = all_predictions['ds'].dt.strftime('%m/%d').tolist()
+            all_predictions = all_predictions['yhat'].values
+        
+        # 創建日期索引
+        dates = [datetime.now() + timedelta(days=i) for i in range(6)]
+        date_labels = [d.strftime('%m/%d') for d in dates]
+        
+        # 繪圖
+        fig, ax = plt.subplots(figsize=(14, 7))
+        colors = ['#FF9999', '#66B2FF']
+        labels = ['預測開盤價', '預測收盤價']
+        
+        for i, (label, color) in enumerate(zip(labels, colors)):
+            ax.plot(date_labels, all_predictions if model_type == "Prophet" else all_predictions[:, i],
+                    label=label, marker='o', color=color, linewidth=2)
+            for j, value in enumerate(all_predictions if model_type == "Prophet" else all_predictions[:, i]):
+                ax.annotate(f'{value:.2f}', (date_labels[j], value),
+                           textcoords="offset points", xytext=(0,10),
+                           ha='center', va='bottom')
+        
+        ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
+        ax.set_xlabel('日期', labelpad=10)
+        ax.set_ylabel('股價', labelpad=10)
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+        ax.grid(True, linestyle='--', alpha=0.7)
+        
+        plt.tight_layout()
+        return gr.update(value=fig)
+        
     except Exception as e:
         logging.error(f"預測過程發生錯誤: {str(e)}")
-        return gr.update(value=None), f"預測過程發生錯誤: {str(e)}"
+        return gr.update(value=None)
 
 # 初始化
 setup_font()
@@ -314,43 +295,43 @@ with gr.Blocks() as demo:
                 value=None
             )
             period_dropdown = gr.Dropdown(
-                choices=["1y", "6mo", "3mo", "1mo"],
+                choices=["1mo", "3mo", "6mo", "1y"],
                 label="抓取時間範圍",
                 value="1y"
             )
-            features_checkbox = gr.CheckboxGroup(
+            features_checkboxes = gr.CheckboxGroup(
                 choices=['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume'],
                 label="選擇要用於預測的特徵",
                 value=['Open', 'Close']
             )
-            model_dropdown = gr.Dropdown(
+            model_type_dropdown = gr.Dropdown(
                 choices=["LSTM", "Prophet"],
                 label="選擇預測模型",
                 value="LSTM"
             )
             predict_button = gr.Button("開始預測", variant="primary")
-            status_output = gr.Textbox(label="狀態", interactive=False)
     
     with gr.Row():
         stock_plot = gr.Plot(label="股價預測圖")
-
+        status_textbox = gr.Textbox(label="狀態", value="")
+    
     # 事件綁定
     category_dropdown.change(
         update_category,
         inputs=[category_dropdown],
-        outputs=[stock_dropdown, stock_item_dropdown, stock_plot, status_output]
+        outputs=[stock_dropdown, stock_item_dropdown, stock_plot]
     )
-
+    
     stock_dropdown.change(
         update_stock,
         inputs=[category_dropdown, stock_dropdown],
-        outputs=[stock_item_dropdown, stock_plot, status_output]
+        outputs=[stock_item_dropdown, stock_plot]
     )
-
+    
     predict_button.click(
         predict_stock,
-        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, period_dropdown, features_checkbox, model_dropdown],
-        outputs=[stock_plot, status_output]
+        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, features_checkboxes, model_type_dropdown],
+        outputs=[stock_plot, status_textbox]
     )
 
 # 啟動應用
