@@ -194,24 +194,24 @@ def update_stock(category, stock):
         stock_plot: gr.update(value=None)
     }
 
-def predict_stock(category, stock, stock_item, features, model_type):
+def predict_stock(category, stock, stock_item, period, features, model_type):
     if not all([category, stock, stock_item]):
-        return gr.update(value=None)
+        return gr.update(value=None), "請選擇完整的選項"
     
     try:
         url = next((item['網址'] for item in category_dict.get(category, [])
                    if item['類股'] == stock), None)
         if not url:
-            return gr.update(value=None)
+            return gr.update(value=None), "無法找到該類股的網址"
         
         stock_items = get_stock_items(url)
         stock_code = stock_items.get(stock_item, "")
         
         if not stock_code:
-            return gr.update(value=None)
+            return gr.update(value=None), "無法找到該股票的代碼"
         
         # 下載股票數據
-        df = yf.download(stock_code, period="1y")
+        df = yf.download(stock_code, period=period)
         if df.empty:
             raise ValueError("無法獲取股票數據")
         
@@ -248,13 +248,20 @@ def predict_stock(category, stock, stock_item, features, model_type):
         colors = ['#FF9999', '#66B2FF']
         labels = ['預測開盤價', '預測收盤價']
         
-        for i, (label, color) in enumerate(zip(labels, colors)):
-            ax.plot(date_labels, all_predictions if model_type == "Prophet" else all_predictions[:, i],
-                    label=label, marker='o', color=color, linewidth=2)
-            for j, value in enumerate(all_predictions if model_type == "Prophet" else all_predictions[:, i]):
-                ax.annotate(f'{value:.2f}', (date_labels[j], value),
-                           textcoords="offset points", xytext=(0,10),
-                           ha='center', va='bottom')
+        for i, (label, color) in enumerate(labels):
+            if model_type == "Prophet":
+                ax.plot(date_labels, all_predictions, label='預測收盤價', marker='o', color=colors[1], linewidth=2)
+                for j, value in enumerate(all_predictions):
+                    ax.annotate(f'{value:.2f}', (date_labels[j], value),
+                               textcoords="offset points", xytext=(0,10),
+                               ha='center', va='bottom')
+                break
+            else:
+                ax.plot(date_labels, all_predictions[:, i], label=label, marker='o', color=color, linewidth=2)
+                for j, value in enumerate(all_predictions[:, i]):
+                    ax.annotate(f'{value:.2f}', (date_labels[j], value),
+                               textcoords="offset points", xytext=(0,10),
+                               ha='center', va='bottom')
         
         ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
         ax.set_xlabel('日期', labelpad=10)
@@ -263,11 +270,11 @@ def predict_stock(category, stock, stock_item, features, model_type):
         ax.grid(True, linestyle='--', alpha=0.7)
         
         plt.tight_layout()
-        return gr.update(value=fig)
+        return gr.update(value=fig), "預測成功"
         
     except Exception as e:
         logging.error(f"預測過程發生錯誤: {str(e)}")
-        return gr.update(value=None)
+        return gr.update(value=None), f"預測過程發生錯誤: {str(e)}"
 
 # 初始化
 setup_font()
@@ -330,7 +337,7 @@ with gr.Blocks() as demo:
     
     predict_button.click(
         predict_stock,
-        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, features_checkboxes, model_type_dropdown],
+        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, period_dropdown, features_checkboxes, model_type_dropdown],
         outputs=[stock_plot, status_textbox]
     )
 
