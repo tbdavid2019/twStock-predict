@@ -196,7 +196,7 @@ def update_stock(category, stock):
         status_output: gr.update(value="")
     }
 
-def predict_stock(category, stock, stock_item, period, selected_features):
+def predict_stock(category, stock, stock_item, period, selected_features, model_choice):
     if not all([category, stock, stock_item]):
         return gr.update(value=None), "請選擇產業類別、類股和股票"
     
@@ -208,55 +208,60 @@ def predict_stock(category, stock, stock_item, period, selected_features):
         
         stock_items = get_stock_items(url)
         stock_code = stock_items.get(stock_item, "")
-        
+
         if not stock_code:
             return gr.update(value=None), "無法獲取股票代碼"
-        
+
         # 下載股票數據，根據用戶選擇的時間範圍
         df = yf.download(stock_code, period=period)
         if df.empty:
             raise ValueError("無法獲取股票數據")
         
-        # 預測
-        predictor = StockPredictor()
-        predictor.train(df, selected_features)
+        # 根據模型選擇進行預測
+        if model_choice == "LSTM":
+            predictor = StockPredictor()
+            predictor.train(df, selected_features)
+            last_data = predictor.scaler.transform(df[selected_features].iloc[-1:].values)
+            predictions = predictor.predict(last_data[0], 5)
+
+            # 反轉預測結果
+            last_original = df[selected_features].iloc[-1].values
+            predictions_original = predictor.scaler.inverse_transform(
+                np.vstack([last_data, predictions])
+            )
+            all_predictions = np.vstack([last_original, predictions_original[1:]])
         
-        last_data = predictor.scaler.transform(df[selected_features].iloc[-1:].values)
-        predictions = predictor.predict(last_data[0], 5)
-        
-        # 反轉預測結果
-        last_original = df[selected_features].iloc[-1].values
-        predictions_original = predictor.scaler.inverse_transform(
-            np.vstack([last_data, predictions])
-        )
-        all_predictions = np.vstack([last_original, predictions_original[1:]])
-        
+        elif model_choice == "Prophet":
+            from prophet import Prophet
+            prophet_df = df.reset_index()[['Date', 'Close']]
+            prophet_df.rename(columns={'Date': 'ds', 'Close': 'y'}, inplace=True)
+            
+            model = Prophet()
+            model.fit(prophet_df)
+
+            future = model.make_future_dataframe(periods=5)
+            forecast = model.predict(future)
+            all_predictions = forecast[['ds', 'yhat']].tail(6).values
+
+        else:
+            return gr.update(value=None), "未知的模型選擇"
+
         # 創建日期索引
-        dates = [datetime.now() + timedelta(days=i) for i in range(6)]
+        dates = [datetime.now() + timedelta(days=i) for i in range(len(all_predictions))]
         date_labels = [d.strftime('%m/%d') for d in dates]
-        
+
         # 繪圖
         fig, ax = plt.subplots(figsize=(14, 7))
-        colors = ['#FF9999', '#66B2FF']
-        labels = [f'預測{feature}' for feature in selected_features]
-        
-        for i, (label, color) in enumerate(zip(labels, colors)):
-            ax.plot(date_labels, all_predictions[:, i], label=label,
-                   marker='o', color=color, linewidth=2)
-            for j, value in enumerate(all_predictions[:, i]):
-                ax.annotate(f'{value:.2f}', (date_labels[j], value),
-                           textcoords="offset points", xytext=(0,10),
-                           ha='center', va='bottom')
-        
+        ax.plot(date_labels, all_predictions, label="預測股價", marker='o', color='#FF9999', linewidth=2)
         ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
         ax.set_xlabel('日期', labelpad=10)
         ax.set_ylabel('股價', labelpad=10)
         ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
         ax.grid(True, linestyle='--', alpha=0.7)
-        
+
         plt.tight_layout()
         return gr.update(value=fig), "預測成功"
-        
+
     except Exception as e:
         logging.error(f"預測過程發生錯誤: {str(e)}")
         return gr.update(value=None), f"預測過程發生錯誤: {str(e)}"
@@ -296,28 +301,33 @@ with gr.Blocks() as demo:
                 label="選擇要用於預測的特徵",
                 value=['Open', 'Close']
             )
+            model_dropdown = gr.Dropdown(
+                choices=["LSTM", "Prophet"],
+                label="選擇預測模型",
+                value="LSTM"
+            )
             predict_button = gr.Button("開始預測", variant="primary")
             status_output = gr.Textbox(label="狀態", interactive=False)
     
     with gr.Row():
         stock_plot = gr.Plot(label="股價預測圖")
-    
+
     # 事件綁定
     category_dropdown.change(
         update_category,
         inputs=[category_dropdown],
         outputs=[stock_dropdown, stock_item_dropdown, stock_plot, status_output]
     )
-    
+
     stock_dropdown.change(
         update_stock,
         inputs=[category_dropdown, stock_dropdown],
         outputs=[stock_item_dropdown, stock_plot, status_output]
     )
-    
+
     predict_button.click(
         predict_stock,
-        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, period_dropdown, features_checkbox],
+        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, period_dropdown, features_checkbox, model_dropdown],
         outputs=[stock_plot, status_output]
     )
 
