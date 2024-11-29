@@ -20,7 +20,7 @@ from prophet import Prophet
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+                   format='%(asctime)s - %(levelname)s - %(message)s')
 
 # 字體設置
 def setup_font():
@@ -124,20 +124,10 @@ class StockPredictor:
             current_data = current_data.reshape(1, -1)
         return np.array(predictions)
     
-    def train_prophet(self, df, target_column='Close'):
-        df_prophet = df.reset_index()[['Date', target_column]].rename(columns={'Date': 'ds', target_column: 'y'})
+    def train_prophet(self, df_prophet):
         self.prophet_model = Prophet()
         self.prophet_model.fit(df_prophet)
-    
-    def predict_prophet(self, df, days=5):
-        if self.prophet_model is None:
-            raise ValueError("Prophet model has not been trained yet.")
-        
-        future = self.prophet_model.make_future_dataframe(periods=days)
-        forecast = self.prophet_model.predict(future)
-        return forecast[['ds', 'yhat']].tail(days)
 
-# Gradio界面函數
 def update_stocks(category):
     if not category or category not in category_dict:
         return []
@@ -207,35 +197,46 @@ def predict_stock(category, stock, stock_item, period, selected_features, model_
         if not stock_code:
             return gr.update(value=None), "無法獲取股票代碼"
         
-        # 下載股票數據，根據用戶選擇的時間範圍
+        # 下載股票數據
         df = yf.download(stock_code, period=period)
         if df.empty:
             raise ValueError("無法獲取股票數據")
         
-        # 預測
         predictor = StockPredictor()
+        
         if model_type == "LSTM":
             predictor.train(df, selected_features)
             last_data = predictor.scaler.transform(df[selected_features].iloc[-1:].values)
             predictions = predictor.predict(last_data[0], 5)
-            
-            # 反轉預測結果
             last_original = df[selected_features].iloc[-1].values
             predictions_original = predictor.scaler.inverse_transform(
                 np.vstack([last_data, predictions])
             )
             all_predictions = np.vstack([last_original, predictions_original[1:]])
+            
         elif model_type == "Prophet":
-            predictor.train_prophet(df, target_column=selected_features[0])  # 使用第一個特徵作為預測目標
-            predictions = predictor.predict_prophet(df, days=5)
-            all_predictions = predictions['yhat'].values
-
+            target_feature = selected_features[0]  # 使用第一個選擇的特徵
+            df_prophet = df.reset_index()
+            df_prophet = df_prophet[['Date', target_feature]].rename(
+                columns={'Date': 'ds', target_feature: 'y'})
+            
+            predictor.train_prophet(df_prophet)
+            future_dates = pd.date_range(
+                start=df_prophet['ds'].iloc[-1] + pd.Timedelta(days=1),
+                periods=5,
+                freq='D'
+            )
+            future = pd.DataFrame({'ds': future_dates})
+            forecast = predictor.prophet_model.predict(future)
+            all_predictions = forecast['yhat'].values
+            
         # 創建日期索引
         dates = [datetime.now() + timedelta(days=i) for i in range(6)]
         date_labels = [d.strftime('%m/%d') for d in dates]
-
+        
         # 繪圖
         fig, ax = plt.subplots(figsize=(14, 7))
+        
         if model_type == "LSTM":
             colors = ['#FF9999', '#66B2FF']
             labels = [f'預測{feature}' for feature in selected_features]
@@ -247,20 +248,22 @@ def predict_stock(category, stock, stock_item, period, selected_features, model_
                                 textcoords="offset points", xytext=(0,10),
                                 ha='center', va='bottom')
         elif model_type == "Prophet":
-            ax.plot(date_labels, all_predictions, label='預測',
+            ax.plot(date_labels[1:], all_predictions, label=f'預測{target_feature}',
                     marker='o', color='#FF9999', linewidth=2)
             for j, value in enumerate(all_predictions):
-                ax.annotate(f'{value:.2f}', (date_labels[j], value),
+                ax.annotate(f'{value:.2f}', (date_labels[j+1], value),
                             textcoords="offset points", xytext=(0,10),
                             ha='center', va='bottom')
-
+        
         ax.set_title(f'{stock_item} 股價預測 (未來5天)', pad=20, fontsize=14)
         ax.set_xlabel('日期', labelpad=10)
         ax.set_ylabel('股價', labelpad=10)
         ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
         ax.grid(True, linestyle='--', alpha=0.7)
         plt.tight_layout()
+        
         return gr.update(value=fig), "預測成功"
+        
     except Exception as e:
         logging.error(f"預測過程發生錯誤: {str(e)}")
         return gr.update(value=None), f"預測過程發生錯誤: {str(e)}"
@@ -307,7 +310,7 @@ with gr.Blocks() as demo:
             )
             predict_button = gr.Button("開始預測", variant="primary")
             status_output = gr.Textbox(label="狀態", interactive=False)
-        with gr.Row():
+        with gr.Column():
             stock_plot = gr.Plot(label="股價預測圖")
 
     # 事件綁定
@@ -323,10 +326,10 @@ with gr.Blocks() as demo:
     )
     predict_button.click(
         predict_stock,
-        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, period_dropdown, features_checkbox, model_type_radio],
+        inputs=[category_dropdown, stock_dropdown, stock_item_dropdown, 
+                period_dropdown, features_checkbox, model_type_radio],
         outputs=[stock_plot, status_output]
     )
 
 # 啟動應用
-if __name__ == "__main__":
-    demo.launch(share=False)
+if __name__ == "__main__
