@@ -16,6 +16,7 @@ import os
 import yfinance as yf
 import logging
 from datetime import datetime, timedelta
+from fbprophet import Prophet
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO,
